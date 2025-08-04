@@ -2,6 +2,8 @@
 
 This repository contains the complete code implementation for the paper “Incremental Uncertainty Estimation with Group-wise Message Passing for Financial Fraud Detection.”
 
+![Model structure](framework.pdf)
+
 ## 📂File Structure
 ```text
 .
