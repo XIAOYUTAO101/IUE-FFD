@@ -12,10 +12,11 @@ This repository contains the complete code implementation for the paper “Incre
 ├── utils.py # General utility functions (data processing, evaluation metrics, etc.)
 ├── args.py # Hyperparameter configuration and parsing
 └── data/ # Stores datasets (e.g., CCT, Vesta, Amazon2023)
+```
 
 ## Environment Dependencies
 
-- Python: `3.8.10`  
+- Python== `3.8.10`  
 - pandas: `2.0.3`  
 - numpy: `1.24.3`  
 - DGL (with CUDA 11.6 support): `1.1.2+cu116`  
