@@ -26,6 +26,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #             grouped_transactions[slot][key].append(transactions[key][i])
 #     return grouped_transactions
 
+# Function to update the graph with new transaction data.
 def Graph_Update(args, graphs, transaction_data, node_types):
     graphs['graph'] = graphs['graph'].to(device)
     graphs['features'] = graphs['features'].to(device)
@@ -33,6 +34,8 @@ def Graph_Update(args, graphs, transaction_data, node_types):
     graphs['train'] = graphs['train'].to(device)
     graphs['val'] = graphs['val'].to(device)
     graphs['test'] = graphs['test'].to(device)
+
+    # Add new nodes to the graph if they don't already exist.
     for ntype, id_col in node_types.items():
         for node_number in range(len(transaction_data['trans_id'])):
             node_id = transaction_data[id_col][node_number]
@@ -40,6 +43,7 @@ def Graph_Update(args, graphs, transaction_data, node_types):
                 graphs['graph'].add_nodes(1, ntype=ntype)
                 # g.nodes[ntype].data[id_col] = torch.tensor([node_id])
 
+    # Add new edges and update features based on the dataset.
     if args.datasets == "CCT":
         for i in range(len(transaction_data['trans_id'])):
             trans_id = transaction_data['trans_id'][i]
@@ -48,11 +52,12 @@ def Graph_Update(args, graphs, transaction_data, node_types):
             card_id = transaction_data['card_id'][i]
             hour = transaction_data['trans_time'][i]
 
+            # Add new transaction node if it doesn't exist.
             if trans_id not in graphs['graph'].nodes('transaction'):
                 graphs['graph'].add_nodes(1, ntype='transaction')
                 # g.nodes['transaction'].data['Trans Id'] = torch.tensor([trans_id])
 
-
+            # Add edges between the new transaction and other nodes.
             graphs['graph'].add_edges(client_id, trans_id, etype=('client', 'ct', 'transaction'))
             graphs['graph'].add_edges(trans_id, client_id, etype=('transaction', 'tc', 'client'))
             graphs['graph'].add_edges(trans_id, merchant_id, etype=('transaction', 'tm', 'merchant'))
@@ -62,12 +67,14 @@ def Graph_Update(args, graphs, transaction_data, node_types):
             graphs['graph'].add_edges(trans_id, hour, etype=('transaction', 'th', 'hour'))
             graphs['graph'].add_edges(hour, trans_id, etype=('hour', 'ht', 'transaction'))
 
+            # Append new features, labels, and masks.
             feature = transaction_data['features'][i].unsqueeze(0).to(device)
             labels = transaction_data['labels'][i].unsqueeze(0).to(device)
             train_mask = transaction_data['train'][i].unsqueeze(0).to(device)
             val_mask = transaction_data['val'][i].unsqueeze(0).to(device)
             test_mask = transaction_data['test'][i].unsqueeze(0).to(device)
 
+            # Update the features of the transaction nodes.
             graphs['features'] = torch.cat((graphs['features'], feature), dim=0)
             graphs['labels'] = torch.cat((graphs['labels'], labels), dim=0)
             graphs['train'] = torch.cat((graphs['train'], train_mask),dim=0)
@@ -143,13 +150,16 @@ def Graph_Update(args, graphs, transaction_data, node_types):
 
     return graphs
 
-
+# Function to create a subgraph containing only the new nodes and their connections.
 def make_subgraph(args, graph, node_ids):
     node_ids_dict = {}
+    # Get the transaction/reviewer node IDs.
     for ntype in graph.ntypes:
         if ntype == 'transaction' or ntype == 'reviewer':
             node_ids_dict[ntype] = torch.tensor(node_ids['trans_id'], device=device)
             break
+            
+    # Get the other node IDs based on the dataset.
     if args.datasets == "CCTFD":
         node_ids_dict['client'] = torch.tensor(list(set(node_ids['client_id'])), device=device)
         node_ids_dict['merchant'] = torch.tensor(list(set(node_ids['merchant_id'])), device=device)
@@ -170,5 +180,6 @@ def make_subgraph(args, graph, node_ids):
         subgraph = dgl.node_subgraph(graph, node_ids_dict)
 
     return subgraph
+
 
 
