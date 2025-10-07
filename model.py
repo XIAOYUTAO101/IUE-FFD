@@ -12,6 +12,14 @@ from torch import nn
 from torch.nn import init
 
 class GraphMetaPaths(nn.Module):
+    """Create and cache coalesced graphs for each meta‑path.
+    Args:
+       meta_paths (List[List[Tuple[str,str,str]]]):
+       A list of meta‑paths. Each meta‑path is a list of (src_type, etype, dst_type).
+    Notes:
+       get_meta_path(g) projects each heterogeneous meta‑path into a homogeneous
+       simple graph with self‑loops so downstream convolutions can be applied.
+    """
     def __init__(self, meta_paths):
         super(GraphMetaPaths, self).__init__()
         self.meta_paths = meta_paths
@@ -22,6 +30,8 @@ class GraphMetaPaths(nn.Module):
         if _cached_graph is None or _cached_graph is not g:
             _cached_graph = g
             _cached_coalesced_graph.clear()
+
+            # For each meta-path, create a new graph where edges represent the meta-path connectivity.
             for i,meta_path in enumerate(self.meta_paths):
                 new_g = dgl.metapath_reachable_graph(
                     g, meta_path)
@@ -31,8 +41,9 @@ class GraphMetaPaths(nn.Module):
                 _cached_coalesced_graph.append(new_g)
         return _cached_coalesced_graph
 
-
 class Seq(nn.Module):
+    """A minimal sequential container that forwards positional/keyword args to the first
+    module and then chains subsequent modules on the resulting tensor."""
     def __init__(self, modlist):
         super().__init__()
         self.modlist = nn.ModuleList(modlist)
@@ -43,8 +54,12 @@ class Seq(nn.Module):
             out = self.modlist[i](out)
         return out
 
-
 class MLP(nn.Module):
+    """Standard MLP with optional tail activation and dropout.
+    Design choices:
+     • Activation is applied after each Linear.
+     • If num_layers == 1, optional tail activation/dropout are applied.
+    """
     def __init__(self,
                  input_channels,
                  hidden_channels,
@@ -86,9 +101,9 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.seq(x)
 
-
-
 class LISeq(nn.Module):
+    """Sequential wrapper that keeps both the running output and the original
+    'source' features so LILinear can modulate by the source."""
     def __init__(self, modlist):
         super().__init__()
         self.modlist = nn.ModuleList(modlist)
@@ -103,6 +118,11 @@ class LISeq(nn.Module):
         return out
 
 class LILinear(nn.Module):
+    """ Multiplies the current input with a learned transformation of the original
+    'src' (self features) to get a source‑aware input, then applies a Linear.
+    This allows different neighbor groups to be processed conditioned on the
+    target node's own representation.
+    """
     def __init__(self, in_features, out_features, origin_infeat, bias = True,
                  device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
@@ -145,6 +165,8 @@ class LILinear(nn.Module):
 
 
 class LIMLP(nn.Module):
+    """An MLP built from LILinear so that each block can be modulated by the
+    original self feature (h_self)."""
     def __init__(self,
                  input_channels: int,
                  hidden_channels: int,
@@ -192,8 +214,26 @@ class LIMLP(nn.Module):
         return self.seq(x, h_self)
 
 
-
+# GMPConv: Group‑wise Message Passing Conv
 class GMPConv(nn.Module):
+    """A label‑aware message‑passing layer with Gaussian kernel weighting.
+    Key ideas:
+      • Split neighbor messages by groups (benign/fraud/unknown) inferred from
+        a pseudo label field ('label_unk' 0/1/2).
+      • Use learnable Gaussian kernels over (h_dst − h_src) to softly weight messages.
+      • Use LI‑MLPs to transform group messages conditioned on target self feature.
+      • Fuse groups with a small Transformer encoder over 4 tokens:
+        [self, benign, fraud, unknown] plus learnable group embeddings.
+        
+    Args:
+       args: expects fields n_kernels, dropout.
+       in_features (int): input feature dim.
+       kernels_hid (int): hidden dim per Gaussian kernel.
+       out_features (int): output feature dim.
+       mlp_activation: activation for the LI‑MLPs.
+       activation: final activation applied to the output.
+       feat_drop (float): feature dropout rate before propagation.
+    """
     def __init__(self,args, in_features, kernels_hid, out_features, mlp_activation = nn.ReLU(), activation=F.leaky_relu, feat_drop=0.0, device=None):
         super(GMPConv, self).__init__()
         self.out_features = out_features
@@ -252,20 +292,28 @@ class GMPConv(nn.Module):
         init.constant_(self.inv_sigma.data, 1)
 
     def agg_func(self,nodes):
+        """Aggregate messages grouped by source pseudo labels.
+        Expects mailbox fields:
+          m: message tensor
+          src_fake_label: 0 (benign), 1 (fraud)
+        """
         return {'neigh_fr': (nodes.mailbox['m'] * (nodes.mailbox['src_fake_label'] == 1).unsqueeze(-1)).sum(1),
                 'neigh_be': (nodes.mailbox['m'] * (nodes.mailbox['src_fake_label'] == 0).unsqueeze(-1)).sum(1)
                 }
 
     def mp_func(self,edges):
+        """Basic message passing: copy source hidden 'h'.
+        Also carry 'label_unk' (0/1/2) for grouping downstream."""
         src_fake_label = edges.src['label_unk']
         # src =  edges.edges()[0]
         src = edges.src['_ID']
         dst = edges.dst['_ID']
-
         return {'m': edges.src['h'], 'src': src, 'src_fake_label': src_fake_label}
 
 
     def mp_func1(self,edges):
+        """Gaussian‑weighted message passing used in ablation.
+        Weight source messages by exp(−0.5‖(h_dst−h_src)−μ‖^2 * inv_sigma^2)."""
         src_fake_label = edges.src['label_unk']
         # src =  edges.edges()[0]
         src = edges.src['_ID']
@@ -284,10 +332,16 @@ class GMPConv(nn.Module):
 
 
     def agg_func1(self,nodes):
-        return {
-                'neigh_unk': (nodes.mailbox['m'] * (nodes.mailbox['src_fake_label'] == 2).unsqueeze(-1)).sum(1)}
+        """Aggregate unknown‑labeled neighbor messages (label==2)."""
+        return {'neigh_unk': (nodes.mailbox['m'] * (nodes.mailbox['src_fake_label'] == 2).unsqueeze(-1)).sum(1)}
 
     def forward(self, g,  feat, edge_weight=None , weights=None):
+        """Run one GMPConv layer.
+        Expects node data fields:
+           • 'label_unk' on sources: 0/1/2 for benign/fraud/unknown grouping.
+        Returns:
+           Tensor of shape (num_dst_nodes, out_features).
+        """
         with g.local_scope():
             g.srcdata['h'] = feat
             g.srcdata['h_'] = feat
@@ -349,7 +403,23 @@ class GMPConv(nn.Module):
                 rst = self.activation(rst)
             return rst
 
+# IUE_GMP Model (Incremental Uncertainty Estimate + GMP)
 class IUE_GMP(nn.Module):
+    """Model backbone that stacks GMPConv over relation‑specific graphs.
+
+    Workflow per forward():
+       1) Read raw features from graph[0].srcdata['feat'].
+       2) Project to hidden.
+       3) For each layer, run a GMPConv on each relation graph and concatenate
+          their outputs, then fuse by a Linear.
+       4) Final Linear to get logits.
+       
+    Args:
+       m: meta‑paths list (kept for compatibility).
+       d (int): input feature dim.
+       c (int): number of classes.
+       args: should provide hidden_channels, kernels_hid, layers, T, dropout.
+    """
     def __init__(self, m, d, c, args, device):
         super(IUE_GMP, self).__init__()
         self.m = list(tuple(meta) for meta in m)
@@ -386,8 +456,19 @@ class IUE_GMP(nn.Module):
         out = self.fcs[-1](h)
         return out,h
 
-
+# IKT: Incremental Knowledge Transfer
 class IKT(object):
+    """Parameter‑importance based regularizer for continual learning.
+    Core idea:
+       • After (or during) learning on a task/slot, estimate per‑parameter
+         importance by the expected squared gradient (Fisher‑style proxy).
+       • Maintain an exponential moving average (EMA) of importance matrices Ω.
+       • Convert per‑parameter importance into a *normalized uncertainty* score
+         to adapt the EMA mixing coefficient per parameter.
+       • During new task training, add a quadratic penalty Ω ⊙ (θ − θ_old)^2 scaled
+         by the inverse uncertainty so that more certain (important) parameters
+         change less.
+   """
     def __init__(self, model):
         self.model = model
         self.history_importance = []
@@ -402,12 +483,22 @@ class IKT(object):
         return name[7:] if name.startswith("module.") else name
 
     def initialize_precision_matrices(self):
+        """Create zero‑initialized tensors with the same shapes as parameters."""
         precisions = {}
         for n, p in self.params.items():
             precisions[self._canon(n)] = p.detach().clone().fill_(0)
         return precisions
 
     def calculate_importance(self, dataloader):
+        """Estimate squared‑gradient importance over a dataloader (Fisher proxy).
+        For each mini‑batch subgraph:
+           1) Forward the model and create a simple scalar loss (sum of L2 norms of outputs).
+           2) Backprop to get per‑parameter gradients.
+           3) Accumulate (grad^2) / N over the dataloader length.
+
+       Then compute a normalized uncertainty per parameter and update the EMA of
+       Ω with a parameter‑wise mixing rate inversely proportional to uncertainty.
+       """
         new_importance = {}
         for n, p in self.params.items():
             new_importance[self._canon(n)] = p.detach().clone().fill_(0)
@@ -425,13 +516,16 @@ class IKT(object):
                 if n in new_importance and p.grad is not None:
                     new_importance[n] += (p.grad ** 2) / num_data
 
+        # Record for history/debug
         self.history_importance.append(new_importance)
 
+        # Convert importance to uncertainty = sum(1 / (imp + eps))
         epsilon = 1e-6
         uncertainty = {}
         for n in new_importance:
             uncertainty[n] = (1 / (new_importance[n] + epsilon)).sum().item()
 
+        # Min‑max normalize uncertainties to [0,1]
         all_uncertainties = list(uncertainty.values())
         min_uncertainty = min(all_uncertainties)
         max_uncertainty = max(all_uncertainties)
@@ -446,6 +540,7 @@ class IKT(object):
 
         self.unc_mean = float(np.mean(list(normalized_uncertainty.values())))
 
+        # Parameter‑wise EMA mixing coefficient m(n) in [m_min, m_max]
         m_max = 0.9
         m_min = 0.5
         dynamic_m = {}
@@ -459,6 +554,10 @@ class IKT(object):
         print("Ω_max =", max(v.max().item() for v in self._precision_matrices.values()))
 
     def penalty(self, model):
+        """Quadratic penalty Ω ⊙ (θ − θ_old)^2 scaled by inverse uncertainty.
+           Returns a scalar loss term to be added to the task loss during training
+           on a new slot/task. Larger importance (smaller uncertainty) ⇒ larger penalty.
+        """
         loss = 0
         epsilon = 1e-6
         for n, p in model.named_parameters():
@@ -472,11 +571,14 @@ class IKT(object):
         return loss
 
     def get_history_importance(self):
+        """Return the list of historical importance dictionaries (per slot)."""
         return self.history_importance
 
     def update_p_old(self):
+        """Snapshot current parameters as the new θ_old after finishing a slot/task."""
         for orig_n, p in self.params.items():
             n = self._canon(orig_n)
             self.p_old[n] = p.clone().detach()
+
 
 
