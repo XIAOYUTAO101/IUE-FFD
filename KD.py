@@ -21,8 +21,9 @@ device ="cuda"
 
 
 class KT(nn.Module):
-    """Distilling the Knowledge in a Neural Network"""
-
+    """Knowledge Distillation loss (Hinton et al.).
+    Uses temperature-scaled KL divergence between teacher and student logits.
+    """
     def __init__(self, T):
         super(KT, self).__init__()
         self.T = T
@@ -108,5 +109,6 @@ def manhattan_distance_loss(z_i, z_j, beta=0.1):
     manhattan_distance = torch.sum(torch.abs(z_i - z_j), dim=-1)
     loss = beta* manhattan_distance.mean()
     return loss
+
 
 
