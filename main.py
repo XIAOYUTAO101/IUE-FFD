@@ -125,6 +125,8 @@ def Refine(args, model, model_mas, graphs, new_data, GraphGenerator, loss_func):
     best_score = 0
     cur_step = 0
     model.to(device)
+    
+    # Initialize calculation of distillation loss
     KD_loss = KT(args.T)
 
     # Keep a copy of the old model for distillation
@@ -279,5 +281,6 @@ if __name__ == '__main__':
     print(f"Dataset path: {path}")
     print(f"Features shape: {graphs['features'].shape}")
     f1_, recall_, fpr_, auc_ = Run(args, graphs, test_data, node_types)
+
 
 
