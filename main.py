@@ -20,22 +20,29 @@ from KD import KT
 device = "cuda:0"
 device1 = "cpu"
 
-
+# Main function for initial slot training
 def main(args,graphs):
     input_dim = graphs['features'].shape[1]
+
+    # Define meta-paths based on the dataset
     if args.datasets == "CCTFD":
         meta_paths = [['tc', 'ct'], ['th', 'ht'], ['tm', 'mt'], ['tc2', 'ct2']]
     elif args.datasets == "Vesta":
         meta_paths = [['tu', 'ut'], ['tc', 'ct'],['th', 'ht']]
     elif args.datasets == "Amazon":
         meta_paths = [['rp', 'pr'], ['ru', 'ur'], ['rh', 'hr']]
+
+    # Initialize the meta-path generator
     GraphGenerator = GraphMetaPaths(meta_paths)
+
+    # Initialize the model
     model = IUE_GMP(m=meta_paths,
                     d=input_dim,
                     c=args.class_num,
                     args=args,
                     device=device).to(device)
-
+    
+    # Initialize the IKT module for continual learning
     model_mas = IKT(model)
 
     optimizer = torch.optim.AdamW(
@@ -54,7 +61,11 @@ def main(args,graphs):
     train_mask = graphs['train']
     val_mask = graphs['val']
     test_mask = graphs['test']
+
+    # Modify the graph structure for the model
     g = Modifiy_graph(GraphGenerator,ori_graph,features,labels,train_mask)
+
+    # Split data into training, validation, and test loaders
     train_loader, val_loader, test_loader = split_data(args, g, train_mask, val_mask, test_mask)
 
     scheduler = LinearSchedule(optimizer, args.epochs, base_lr=args.lr)
@@ -102,11 +113,13 @@ def main(args,graphs):
     mf1, recall, Fpr, auc = evaluate_test(best_marco_f1_thr, model, test_loader)
     print("Test F1:{:5.2f} | Recall:{:5.2f} | Fpr:{:5.2f} | AUC:{:5.2f}".format(
         100 * mf1, 100 * recall, 100 * Fpr, 100 * auc))
+
+    # Calculate parameter importance for continual learning
     model_mas.calculate_importance(train_loader)
     model_mas.update_p_old()
     return  model, model_mas,loss_fcn, GraphGenerator
 
-
+# Upon the arrival of new data at slot n, the model is further optimized with the incoming samples to enable continual learning.
 def Refine(args, model, model_mas, graphs, new_data, GraphGenerator, loss_func):
     best_loss = 100000
     best_score = 0
@@ -114,8 +127,10 @@ def Refine(args, model, model_mas, graphs, new_data, GraphGenerator, loss_func):
     model.to(device)
     KD_loss = KT(args.T)
 
+    # Keep a copy of the old model for distillation
     best_old_model = copy.deepcopy(model)
 
+    # Load new data
     labels = new_data['labels']
     train_mask = new_data['train']
     val_mask = new_data['val']
@@ -186,23 +201,32 @@ def Refine(args, model, model_mas, graphs, new_data, GraphGenerator, loss_func):
     f1, recall, fpr, auc = evaluate_test(best_marco_f1_thr, model, test_loader)
     print("Test F1:{:5.2f} | Recall:{:5.2f} | Fpr:{:5.2f} | AUC:{:5.2f}".format(
         100 * f1, 100 * recall, 100 * fpr, 100 * auc))
+
+    # Update parameter importance after refining
     model_mas.calculate_importance(train_loader)
     model_mas.update_p_old()
     return model, model_mas
 
-
+# Main execution function
 def Run(args, graphs, test_data, node_types):
+    # Initial training
     best_model, model_mas, loss_func, GraphGenerator= main(args, graphs)
     best_model = best_model.to(device)
     GraphGenerator = GraphGenerator.to(device)
     all_tasks = []
     f1, recall, fpr, auc=0,0,0,0
+
+    # Process data in time slots for continual learning
     for slot in test_data:
         new_graphs_id = {}
         print(f"Processing transactions for time slot {slot}")
         new_graphs_id['trans_id']=test_data[slot]['trans_id']
+
+        # Update the graph with new data
         graphs = Graph_Update(args, graphs, test_data[slot], node_types)
         new_g = graphs['graph'].to(device)
+
+        # Collect node IDs for the new data
         if args.datasets == 'CCTFD':
             new_graphs_id['client_id'] = test_data[slot]['client_id']
             new_graphs_id['merchant_id'] = test_data[slot]['merchant_id']
@@ -217,7 +241,10 @@ def Run(args, graphs, test_data, node_types):
             new_graphs_id['user_id'] = test_data[slot]['user_id']
             new_graphs_id['trans_time'] = test_data[slot]['trans_time']
 
+        # Create a subgraph for the new data
         subgraph_hetero = make_subgraph(args,new_g, new_graphs_id)
+
+        # Modify the subgraph for the model
         hetero_graphs = Modifiy_graph(GraphGenerator, subgraph_hetero, test_data[slot]['features'],
                                       test_data[slot]['labels'], test_data[slot]['train'])
         print("Refining model...")
@@ -226,6 +253,7 @@ def Run(args, graphs, test_data, node_types):
         all_tasks.append(new_graphs_id)
 
 
+        # Evaluate the model on the entire updated graph
         ori_g = graphs['graph'].to(device1)
         features = graphs['features'].to(device1)
         labels = graphs['labels'].to(device1)
@@ -251,4 +279,5 @@ if __name__ == '__main__':
     print(f"Dataset path: {path}")
     print(f"Features shape: {graphs['features'].shape}")
     f1_, recall_, fpr_, auc_ = Run(args, graphs, test_data, node_types)
+
 
