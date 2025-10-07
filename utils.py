@@ -26,6 +26,7 @@ from KD import DistillKL
 device0 ="cuda"
 device1 = "cpu"
 
+# Function to evaluate the model on the validation set and find the best threshold.
 def evaluate_val(global_predictions, loss_fuc, model, test_loader):
     model.eval()
     with torch.no_grad():
@@ -60,7 +61,7 @@ def evaluate_val(global_predictions, loss_fuc, model, test_loader):
     return total_loss / len(
         test_loader), best_model, best_marco_f1, best_marco_f1_thr, best_recall
 
-
+# Function to evaluate the model on the test set.
 def evaluate_test(thres_f1, model, test_loader):
     model = model.to(device0)
     model.eval()
@@ -99,6 +100,7 @@ def get_binary_mask(total_size, indices):
     mask[indices] = 1
     return mask.byte()
 
+# Function to load graph data.
 def load_graph(dataset):
     if dataset == "CCT":
         path = 'data/graphs_CCT_online.pkl'
@@ -127,7 +129,7 @@ def load_graph(dataset):
             test_data = pickle.load(f)
         return graphs,test_data,path
 
-
+# Function to load node type information.
 def load_nodes_types(dataset):
     if dataset == "CCT":
         with open('data/nodes_types_CCT.pkl', 'rb') as f:
@@ -142,7 +144,7 @@ def load_nodes_types(dataset):
             node_types = pickle.load(f)
         return node_types
 
-
+# Function to modify the graph structure for the model.
 def Modifiy_graph(GraphGenerator, graph, features, labels, idx):
     graph = graph.to(device1)
     idx = idx.to(device1)
@@ -166,7 +168,7 @@ def Modifiy_graph(GraphGenerator, graph, features, labels, idx):
 
     return hg
 
-
+# Function to split data into training, validation, and test loaders.
 def split_data(args, data, train_mask, val_mask, test_mask):
     n_sample = {}
     for e in data.etypes:
@@ -225,6 +227,7 @@ def setup(args):
 def has_one(tensor):
     return (tensor == 1).nonzero().size[0] > 0
 
+# A class for linear learning rate schedule with warmup and decay.
 class LinearSchedule(lrs.LambdaLR):
     """Linear warmup and then linear decay.
     Linearly increases learning rate from 0 to base_lr over `warmup_steps` training steps.
@@ -240,4 +243,5 @@ class LinearSchedule(lrs.LambdaLR):
         if step < self.warmup_steps:
             return float(step) / float(max(1, self.warmup_steps)) * self.base_lr
         return max(0.0, float(self.t_total - step) / float(max(1.0, self.t_total - self.warmup_steps))) * self.base_lr
+
 
