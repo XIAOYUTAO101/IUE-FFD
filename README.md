@@ -13,6 +13,7 @@ This repository contains the complete code implementation for the paper “Incre
 ├── KD.py             # Distance metric functions (for knowledge distillation, etc.)
 ├── utils.py          # General utility functions (data processing, evaluation metrics, etc.)
 ├── args.py           # Hyperparameter configuration and parsing
+├── Supplementary Experiment.md  # The file Supplementary Experiment.md contains the additional experiments we conducted in response to the reviewers’ questions.
 └── data/             # Stores datasets (e.g., CCT, Vesta, Amazon2023)
 ```
 
