@@ -38,3 +38,10 @@ Run an example (using CCT as an example):
 ```bash
 python main.py --dataset CCT --alpha 0.5 --beta 1.0
 ```
+
+This example demonstrates the open-world pipeline on the CCT dataset. The procedure is:
+1. run main.py to parse hyperparameters and load the dataset;
+2. initialize the model and train/evaluate the initial task within main;
+3. perform heterogeneous graph evolution by invoking the key functions in GraphUpdate.py;
+4. after evolution, extract the subgraph for the current time window (slot) and call Refine in main.py to conduct replay-free training;
+5. repeat steps 3–4 until all slots have been processed.
