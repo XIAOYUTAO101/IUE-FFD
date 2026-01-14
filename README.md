@@ -1,6 +1,6 @@
 # When Fraud Evolves: Towards Open-World Financial Fraud Detection via Incremental Uncertainty Estimation
 
-This repository contains the complete code implementation for the paper “Incremental Uncertainty Estimation with Group-wise Message Passing for Financial Fraud Detection.”
+This repository contains the complete code implementation for the paper “When Fraud Evolves: Towards Open-World Financial Fraud Detection via Incremental Uncertainty Estimation.”
 
 ![Model structure](framework.png)
 
